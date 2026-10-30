@@ -40,7 +40,8 @@
   }
   input::placeholder { color: var(--hint); opacity: .7; }
   input:focus { border-color: var(--accent); }
-  input.bad { border-color: var(--danger); }
+  input.bad, input.big { border-color: var(--danger); }
+  input.big { color: var(--danger); }
   .del { height: 46px; border: 0; background: none; color: var(--hint); font-size: 18px; cursor: pointer; padding: 0; }
   .footer {
     position: sticky; bottom: 0; margin-top: 14px; padding: 10px 0 4px;
@@ -67,7 +68,8 @@
   </div>
 </main>
 <script>
-  // Opened by the bot with ?lang=ru|kz&mode=bent&p=717x147x1,357x597x2 (p = prefill).
+  // Opened by the bot with ?lang=ru|kz&mode=bent&p=717x147x1,357x597x2&maxh=2800&maxw=2070&rot=1
+  // (p = prefill; maxh/maxw = largest part that fits the sheet; rot = parts may be rotated).
   // Sends the list back as text lines in the same order the bot's text input uses:
   // MDF "height width qty", bent "width height radius qty".
   const tg = window.Telegram && window.Telegram.WebApp;
@@ -75,6 +77,14 @@
   const qs = new URLSearchParams(location.search);
   const lang = qs.get("lang") === "kz" ? "kz" : "ru";
   const bent = qs.get("mode") === "bent";
+  const maxH = parseInt(qs.get("maxh"), 10) || 0;
+  const maxW = parseInt(qs.get("maxw"), 10) || 0;
+  const rotate = qs.get("rot") === "1";
+
+  function fits(h, w) {
+    if (!maxH || !maxW) return true;
+    return (h <= maxH && w <= maxW) || (rotate && w <= maxH && h <= maxW);
+  }
 
   const TEXT = {
     ru: {
@@ -85,6 +95,8 @@
       done: "Готово", fix: "Заполните отмеченные поля",
       empty: "Введите хотя бы одну деталь",
       long: "Слишком длинный список — разделите заказ на два",
+      max: (h, w) => `Максимум: высота ${h}, ширина ${w} мм.`,
+      big: (h, w) => `Деталь больше листа. Максимум: высота ${h}, ширина ${w} мм`,
     },
     kz: {
       title: "Бөлшектердің өлшемдері",
@@ -94,6 +106,8 @@
       done: "Дайын", fix: "Белгіленген өрістерді толтырыңыз",
       empty: "Кемінде бір бөлшек енгізіңіз",
       long: "Тізім тым ұзын — тапсырысты екіге бөліңіз",
+      max: (h, w) => `Ең көбі: биіктігі ${h}, ені ${w} мм.`,
+      big: (h, w) => `Бөлшек парақтан үлкен. Ең көбі: биіктігі ${h}, ені ${w} мм`,
     },
   }[lang];
   const COLS = bent ? ["w", "h", "r", "q"] : ["h", "w", "q"];
@@ -106,7 +120,7 @@
   document.documentElement.lang = lang === "kz" ? "kk" : "ru";
   document.title = TEXT.title;
   document.getElementById("title").textContent = TEXT.title;
-  document.getElementById("hint").textContent = TEXT.hint;
+  document.getElementById("hint").textContent = TEXT.hint + (maxH && maxW ? " " + TEXT.max(maxH, maxW) : "");
   document.documentElement.style.setProperty("--cols", COLS.length);
   const head = document.getElementById("head");
   head.append(document.createElement("span"));
@@ -152,9 +166,12 @@
   }
 
   function collect(mark) {
-    let count = 0, area = 0, ok = true;
+    let count = 0, area = 0, ok = true, tooBig = false;
     const lines = [];
     for (const row of rowsEl.children) {
+      const field = (key) => row.querySelector(`input[data-key="${key}"]`);
+      field("h").classList.remove("big");
+      field("w").classList.remove("big");
       if (isEmpty(row)) continue;
       const v = {};
       for (const inp of row.querySelectorAll("input")) {
@@ -165,13 +182,20 @@
           if (mark) inp.classList.add("bad");
         }
       }
+      // Oversized parts are flagged while typing, not only on submit.
+      if (v.h > 0 && v.w > 0 && !fits(v.h, v.w)) {
+        ok = false;
+        tooBig = true;
+        field("h").classList.add("big");
+        field("w").classList.add("big");
+      }
       if (v.h > 0 && v.w > 0 && v.q > 0) {
         count += v.q;
         area += (v.h * v.w * v.q) / 1e6;
       }
       lines.push(COLS.map((k) => v[k]).join(" "));
     }
-    return { lines, count, area, ok };
+    return { lines, count, area, ok, tooBig };
   }
 
   function refresh() {
@@ -183,9 +207,9 @@
       const trailing = i === all.length - 1 && isEmpty(row);
       row.querySelector(".del").style.visibility = trailing ? "hidden" : "visible";
     });
-    const { count, area } = collect(false);
+    const { count, area, tooBig } = collect(false);
     totalEl.innerHTML = TEXT.total(count, area.toFixed(2));
-    errorEl.textContent = "";
+    errorEl.textContent = tooBig ? TEXT.big(maxH, maxW) : "";
     const label = count ? `${TEXT.done} · ${count}` : TEXT.done;
     sendBtn.textContent = label;
     if (inTelegram) {
@@ -210,9 +234,9 @@
   }
 
   function submit() {
-    const { lines, ok } = collect(true);
+    const { lines, ok, tooBig } = collect(true);
     const data = lines.join("\n");
-    let err = !lines.length ? TEXT.empty : !ok ? TEXT.fix : "";
+    let err = !lines.length ? TEXT.empty : tooBig ? TEXT.big(maxH, maxW) : !ok ? TEXT.fix : "";
     if (!err && new Blob([data]).size > 4000) err = TEXT.long;  // Telegram limit for sendData
     if (err) {
       errorEl.textContent = err;
