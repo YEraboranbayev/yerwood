@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Размеры деталей</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #151515);
+    --hint: var(--tg-theme-hint-color, #8a8f98);
+    --accent: var(--tg-theme-button-color, #2a9df4);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --field: var(--tg-theme-secondary-bg-color, #f0f2f5);
+    --danger: #e5484d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: var(--tg-theme-bg-color, #17212b);
+      --text: var(--tg-theme-text-color, #f5f5f5);
+      --field: var(--tg-theme-secondary-bg-color, #232e3c);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 520px; margin: 0 auto; padding: 14px 16px 24px; }
+  h1 { font-size: 19px; margin: 0 0 2px; }
+  .hint { color: var(--hint); font-size: 13px; margin: 0 0 14px; }
+  .grid { display: grid; grid-template-columns: 22px repeat(var(--cols), minmax(0, 1fr)) 32px; gap: 6px; align-items: center; }
+  .head span { color: var(--hint); font-size: 12px; text-align: center; }
+  .row { margin-top: 6px; }
+  .num { color: var(--hint); font-size: 13px; text-align: right; }
+  input {
+    width: 100%; height: 46px; min-width: 0; padding: 0 4px;
+    border: 1.5px solid transparent; border-radius: 10px; outline: none;
+    background: var(--field); color: var(--text);
+    font-size: 18px; text-align: center; -webkit-appearance: none;
+  }
+  input::placeholder { color: var(--hint); opacity: .7; }
+  input:focus { border-color: var(--accent); }
+  input.bad { border-color: var(--danger); }
+  .del { height: 46px; border: 0; background: none; color: var(--hint); font-size: 18px; cursor: pointer; padding: 0; }
+  .footer {
+    position: sticky; bottom: 0; margin-top: 14px; padding: 10px 0 4px;
+    background: var(--bg); border-top: 1px solid var(--field);
+  }
+  .total { font-size: 15px; }
+  .error { color: var(--danger); font-size: 14px; min-height: 20px; margin-top: 2px; }
+  #send {
+    display: none; width: 100%; height: 48px; margin-top: 8px; border: 0; border-radius: 10px;
+    background: var(--accent); color: var(--accent-text); font-size: 16px; font-weight: 600; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title"></h1>
+  <p class="hint" id="hint"></p>
+  <div class="grid head" id="head"></div>
+  <div id="rows"></div>
+  <div class="footer">
+    <div class="total" id="total"></div>
+    <div class="error" id="error"></div>
+    <button id="send" type="button"></button>
+  </div>
+</main>
+<script>
+  // Opened by the bot with ?lang=ru|kz&mode=bent&p=717x147x1,357x597x2 (p = prefill).
+  // Sends the list back as text lines in the same order the bot's text input uses:
+  // MDF "height width qty", bent "width height radius qty".
+  const tg = window.Telegram && window.Telegram.WebApp;
+  const inTelegram = !!(tg && tg.platform && tg.platform !== "unknown");
+  const qs = new URLSearchParams(location.search);
+  const lang = qs.get("lang") === "kz" ? "kz" : "ru";
+  const bent = qs.get("mode") === "bent";
+
+  const TEXT = {
+    ru: {
+      title: "Размеры деталей",
+      hint: "Все размеры — в миллиметрах. Новая строка появляется сама.",
+      h: "Высота", w: "Ширина", r: "Радиус", q: "Кол-во",
+      total: (n, a) => `Деталей: <b>${n}</b> шт. · Площадь: <b>${a}</b> м²`,
+      done: "Готово", fix: "Заполните отмеченные поля",
+      empty: "Введите хотя бы одну деталь",
+      long: "Слишком длинный список — разделите заказ на два",
+    },
+    kz: {
+      title: "Бөлшектердің өлшемдері",
+      hint: "Барлық өлшемдер — миллиметрмен. Жаңа жол өзі пайда болады.",
+      h: "Биіктігі", w: "Ені", r: "Радиусы", q: "Саны",
+      total: (n, a) => `Бөлшектер: <b>${n}</b> дана · Аудан: <b>${a}</b> м²`,
+      done: "Дайын", fix: "Белгіленген өрістерді толтырыңыз",
+      empty: "Кемінде бір бөлшек енгізіңіз",
+      long: "Тізім тым ұзын — тапсырысты екіге бөліңіз",
+    },
+  }[lang];
+  const COLS = bent ? ["w", "h", "r", "q"] : ["h", "w", "q"];
+
+  const rowsEl = document.getElementById("rows");
+  const totalEl = document.getElementById("total");
+  const errorEl = document.getElementById("error");
+  const sendBtn = document.getElementById("send");
+
+  document.documentElement.lang = lang === "kz" ? "kk" : "ru";
+  document.title = TEXT.title;
+  document.getElementById("title").textContent = TEXT.title;
+  document.getElementById("hint").textContent = TEXT.hint;
+  document.documentElement.style.setProperty("--cols", COLS.length);
+  const head = document.getElementById("head");
+  head.append(document.createElement("span"));
+  for (const key of COLS) {
+    const s = document.createElement("span");
+    s.textContent = TEXT[key];
+    head.append(s);
+  }
+  head.append(document.createElement("span"));
+
+  function isEmpty(row) {
+    return [...row.querySelectorAll("input")].every((i) => i.value === "");
+  }
+
+  function makeRow(values = []) {
+    const row = document.createElement("div");
+    row.className = "grid row";
+    const num = document.createElement("span");
+    num.className = "num";
+    row.append(num);
+    COLS.forEach((key, i) => {
+      const inp = document.createElement("input");
+      inp.inputMode = "numeric";
+      inp.autocomplete = "off";
+      inp.setAttribute("pattern", "[0-9]*");
+      inp.setAttribute("enterkeyhint", "next");
+      inp.setAttribute("aria-label", TEXT[key]);
+      inp.dataset.key = key;
+      if (key === "q") inp.placeholder = "1";
+      inp.value = values[i] || "";
+      inp.addEventListener("input", onInput);
+      inp.addEventListener("keydown", onKey);
+      row.append(inp);
+    });
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "del";
+    del.textContent = "✕";
+    del.addEventListener("click", () => { row.remove(); refresh(); });
+    row.append(del);
+    rowsEl.append(row);
+    return row;
+  }
+
+  function collect(mark) {
+    let count = 0, area = 0, ok = true;
+    const lines = [];
+    for (const row of rowsEl.children) {
+      if (isEmpty(row)) continue;
+      const v = {};
+      for (const inp of row.querySelectorAll("input")) {
+        const n = parseInt(inp.value || (inp.dataset.key === "q" ? "1" : "0"), 10);
+        v[inp.dataset.key] = n;
+        if (!(n > 0)) {
+          ok = false;
+          if (mark) inp.classList.add("bad");
+        }
+      }
+      if (v.h > 0 && v.w > 0 && v.q > 0) {
+        count += v.q;
+        area += (v.h * v.w * v.q) / 1e6;
+      }
+      lines.push(COLS.map((k) => v[k]).join(" "));
+    }
+    return { lines, count, area, ok };
+  }
+
+  function refresh() {
+    // Always keep exactly one empty row at the end, ready for the next part.
+    const rows = () => [...rowsEl.children];
+    if (!rows().length || !isEmpty(rows().at(-1))) makeRow();
+    rows().forEach((row, i, all) => {
+      row.querySelector(".num").textContent = i + 1;
+      const trailing = i === all.length - 1 && isEmpty(row);
+      row.querySelector(".del").style.visibility = trailing ? "hidden" : "visible";
+    });
+    const { count, area } = collect(false);
+    totalEl.innerHTML = TEXT.total(count, area.toFixed(2));
+    errorEl.textContent = "";
+    const label = count ? `${TEXT.done} · ${count}` : TEXT.done;
+    sendBtn.textContent = label;
+    if (inTelegram) {
+      tg.MainButton.setText(label);
+      count ? tg.enableClosingConfirmation() : tg.disableClosingConfirmation();
+    }
+  }
+
+  function onInput(e) {
+    const clean = e.target.value.replace(/\D/g, "").slice(0, 5);
+    if (clean !== e.target.value) e.target.value = clean;
+    e.target.classList.remove("bad");
+    refresh();
+  }
+
+  function onKey(e) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const all = [...rowsEl.querySelectorAll("input")];
+    const next = all[all.indexOf(e.target) + 1];
+    next ? next.focus() : e.target.blur();
+  }
+
+  function submit() {
+    const { lines, ok } = collect(true);
+    const data = lines.join("\n");
+    let err = !lines.length ? TEXT.empty : !ok ? TEXT.fix : "";
+    if (!err && new Blob([data]).size > 4000) err = TEXT.long;  // Telegram limit for sendData
+    if (err) {
+      errorEl.textContent = err;
+      if (inTelegram) tg.HapticFeedback.notificationOccurred("error");
+      return;
+    }
+    if (inTelegram) {
+      tg.disableClosingConfirmation();
+      tg.sendData(data);
+    } else {
+      alert(data);
+    }
+  }
+
+  for (const item of (qs.get("p") || "").split(",").filter(Boolean)) {
+    makeRow(item.split("x"));
+  }
+  refresh();
+
+  if (inTelegram) {
+    tg.ready();
+    tg.expand();
+    tg.MainButton.onClick(submit);
+    tg.MainButton.show();
+  } else {
+    sendBtn.style.display = "block";
+    sendBtn.addEventListener("click", submit);
+  }
+  if (rowsEl.children.length === 1) rowsEl.querySelector("input").focus();
+</script>
+</body>
+</html>
